@@ -1,0 +1,302 @@
+---
+title: "Rafael's Notebook Course B"
+author: "Rafael Oresti Anastassiades"
+format: 
+  html:
+    embed-resources: true
+---
+
+This is a Quarto website.
+
+To learn more about Quarto websites visit <https://quarto.org/docs/websites>.
+
+## 2.2 VVD36 PhotoI wdecay 
+
+```{r}
+library(readxl)
+library(tibble)
+
+photo_data <- read_excel("data/Photoaducct.xlsx")
+
+# Convert tibble to data.frame 
+photo_data_df <- as.data.frame(photo_data)
+
+# Extract wavelengths
+wavelengths <- photo_data_df[[1]]
+
+# Extract absorbance matrix
+abs_matrix <- as.matrix(photo_data_df[ , -1])  # drop the wavelength column
+
+# Restriction to 300-500 nm
+subset_idx <- wavelengths >= 300 & wavelengths <= 500
+wavelengths_sub <- wavelengths[subset_idx]
+abs_matrix_sub <- abs_matrix[subset_idx, ]
+
+#VVD36 Photodecay
+matplot(
+  x = wavelengths_sub,
+  y = abs_matrix_sub,
+  type = "l",
+  lty = 1,
+  col = rainbow(ncol(abs_matrix_sub)),
+  xlab = "λ [nm]",
+  ylab = "Absorbance",
+  main = "VVD36 Photodecay",
+  xlim = c(350, 500),
+  ylim = c(0.026,0.7)
+)
+
+# Legend
+par(mar = c(0,0,0,0))
+plot.new()
+legend("center",
+       legend = colnames(photo_data_df)[-1],
+       col = rainbow(ncol(abs_matrix_sub)),
+       lty = 1,
+       ncol = 4,  # control how many columns the legend has
+       cex = 0.8,
+       bty = "n")
+
+#------------
+# Onward only Abs450
+abs450 <- data.frame(t(photo_data_df[101, -1]))
+colnames(abs450) <- "Absorbance_450nm"
+abs450$Time <- as.numeric(colnames(photo_data_df)[-1])
+x <- abs450$Time
+y <- abs450$Absorbance_450nm
+
+#Fit to exponential decay with asymptote
+nls_fit <- nls(y ~ y0 + A * exp(-k * x),
+               start = list(y0 = min(y), A = max(y)-min(y), k = 0.01))
+
+#Smoothing
+t_seq <- seq(min(x), max(x), length.out = 200)
+pred_y <- predict(nls_fit, newdata = list(x = t_seq))
+
+par(mfrow = c(1,1))
+par(mar = c(5, 5, 4, 2) + 0.1)
+plot(x, y,
+     pch = 19,  cex = .5, col = "black",
+     xlab = "t [min]", ylab = "Absorbance at 450 nm",
+     main = "VVD36 at 450 nm over Time",
+     bty = "l")
+
+lines(t_seq, pred_y, col = "grey", lwd = 2)
+
+#for y=A_max/2 is x_half=ln(2)/k
+params <- coef(nls_fit)
+y0 <- params["y0"]
+A  <- params["A"]
+k  <- params["k"]
+x_half <- log(2) / k
+print(x_half)
+```
+
+> As Michael explained, there will be no asymptotic behavior due to cell debris continuously increasing the baseline. The assumption of a predictable asymptote must therefore be discarded, and manual determination of t₁/₂ yields a value of 150 minutes.
+
+## 2.3 Luciferase FRQ Promoter Activity
+
+```{r}
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+
+# df out of Axel's Excel
+Luc_2 <- data.frame(
+  Group = c("BCS", "BCS", "BCS", "BCS", "Cu", "Cu", "Cu", "Cu"),
+  X0 = c(4142, 3660, 4610, 4006, 960, 900, 960, 1052),
+  X15 = c(8836, 9264, 4600, 4524, 6406, 6218, 4336, 5170),
+  X60 = c(8140,11066, 6850,11774,11624,13186,10390,14320),
+  X150= c(4246, 4502, 4788, 4852,13490,14078,14050,14670)
+)
+
+# Long Format is needed for Analysis
+Luc_long <- Luc_2 %>%
+  pivot_longer(cols = X0:X150, names_to = "Time", values_to = "Emission") %>%
+  mutate(Time = as.numeric(sub("X", "", Time)))
+
+#Compute means + SD
+stats_df <- Luc_long %>%
+  group_by(Group, Time) %>%
+  summarise(Mean = mean(Emission),
+            SD = sd(Emission),
+            .groups = "drop")
+
+#Normalization to baseline
+baseline_df <- stats_df %>%
+  filter(Time == 0) %>%
+  select(Group, baseline = Mean)
+
+stats_norm <- stats_df %>%
+  left_join(baseline_df, by = "Group") %>%
+  mutate(Mean_norm = Mean / baseline,
+         SD_norm = SD / baseline)
+
+bcs_data <- stats_norm %>% filter(Group == "BCS")
+cu_data  <- stats_norm %>% filter(Group == "Cu")
+
+
+plot(bcs_data$Time, bcs_data$Mean_norm, type = "p", pch = 16, col = "blue",
+     xlab = "Time [min]", ylab = "Luminescence / Luminescence(t=0) [AU]",
+     main = "Luciferase FRQ promoter activity",
+     ylim = range(c(bcs_data$Mean_norm + bcs_data$SD_norm, cu_data$Mean_norm + cu_data$SD_norm)),
+     xaxt = "n")
+points(cu_data$Time, cu_data$Mean_norm, pch = 16, col = "red")
+axis(1, at=c(0,15,60,150))
+legend("topleft", legend = c("Copper", "BCS"),
+       col = c("red", "blue"), pch=16, lty=1, bty="n")
+
+#SD error bars
+arrows(bcs_data$Time, bcs_data$Mean_norm - bcs_data$SD_norm,
+       bcs_data$Time, bcs_data$Mean_norm + bcs_data$SD_norm,
+       angle=90, code=3, length=0.05, col="blue")
+arrows(cu_data$Time, cu_data$Mean_norm - cu_data$SD_norm,
+       cu_data$Time, cu_data$Mean_norm + cu_data$SD_norm,
+       angle=90, code=3, length=0.05, col="red")
+
+#LOESS smoothed curves
+lines(bcs_data$Time, predict(loess(Mean_norm ~ Time, data=bcs_data, degree=2, span=1)), col = "blue")
+lines(cu_data$Time, predict(loess(Mean_norm ~ Time, data=cu_data, degree=2, span=1)), col = "red")
+
+#t-Test on normalized data
+Luc_long_norm <- Luc_long %>%
+  left_join(baseline_df, by = "Group") %>%
+  mutate(Emission_norm = Emission / baseline)
+
+t_results_norm <- Luc_long_norm %>%
+  group_by(Time) %>%
+  group_map(~ {
+    t_res <- t.test(Emission_norm ~ Group, data = .x)
+    tibble(
+      Time = unique(.x$Time),
+      t_statistic = t_res$statistic,
+      p_value = t_res$p.value
+    )
+  }) %>%
+  bind_rows()
+
+print(t_results_norm)
+```
+
+## 2.4 qRT-PCR
+
+### Figure
+
+```{r}
+#Calculated in Axel's Excel Sheet
+df <- data.frame(
+  Time = c(0, 15, 60, 150),
+  BCS = c(1, 2.97876113, 1.07759563, 0.91183035),
+  SD_BCS = c(0.182957766, 0.341552738, 0.199284435, 0.320413136),
+  Cu = c(1,10.9564896, 6.81055194, 4.78376633),
+  SD_Cu = c(0.164463051, 0.077791448, 0.067320859, 0.066183372)
+)
+
+#Line Plot
+plot(df$Time, df$BCS, type = "o", pch = 16, col = "blue",
+     ylim = range(c(df$BCS + df$SD_BCS, df$Cu + df$SD_Cu)),
+     xlab = "Time [min]",
+     ylab = expression(2^{-Delta*Delta*C[T]}),
+     main = "FRQ Levels by qRT-PCR",
+     xaxt = "n",
+     cex.lab = 1.1)  # Axis label size
+
+lines(df$Time, df$Cu, type = "o", pch = 16, col = "red")
+axis(1, at = c(0, 15, 60, 150))
+axis(2, at = 1:11)
+
+legend("topright", legend = c("BCS", "Cu"),
+       col = c("blue", "red"), pch = 16, lty = 1,
+       bty = "n", cex = 1.2)  # Legend text size
+
+# Error bars for SD
+arrows(df$Time, df$BCS - df$SD_BCS, df$Time, df$BCS + df$SD_BCS,
+       angle = 90, code = 3, length = 0.05, col = "blue")
+arrows(df$Time, df$Cu - df$SD_Cu, df$Time, df$Cu + df$SD_Cu,
+       angle = 90, code = 3, length = 0.05, col = "red")
+#SDs
+arrows(df$Time, df$BCS - df$SD_BCS, df$Time, df$BCS + df$SD_BCS,
+       angle = 90, code = 3, length = 0.05, col = "blue")
+arrows(df$Time, df$Cu - df$SD_Cu, df$Time, df$Cu + df$SD_Cu,
+       angle = 90, code = 3, length = 0.05, col = "red")
+
+model <- lm(Cu ~ BCS, data = df)
+summary(model)
+
+```
+
+### Modells
+
+```{r}
+library(dplyr)
+
+# Realtive expression data 
+df_modells <- data.frame(
+  Sample = c(
+    rep("cu0", 3), rep("bcs0", 3),
+    rep("cu15", 3), rep("bcs15", 3),
+    rep("cu60", 3), rep("bcs60", 3),
+    rep("cu150", 3), rep("bcs150", 3)
+  ),
+  rel_exp = c(
+    0.987957632, 1.127013227, 0.898116523,
+    1.879187556, 1.574085447, 1.469721669,
+    11.32682657, 11.27856078, 10.29561696,
+    4.845622186, 6.170291196, 3.843132451,
+    6.483297496, 7.113792435, 6.849357075,
+    1.499745573, 1.89130448, 1.917882296,
+    4.542066025, 4.863435445, 4.95579457,
+    1.670743176, 1.152005686, 1.712424165
+  )
+)
+
+# Extraction of group and time from sample name
+df_modells <- df_modells %>%
+  mutate(
+    Group = gsub("[0-9]", "", Sample),
+    Time = as.numeric(gsub("[a-zA-Z]", "", Sample))
+  )
+
+# Summary per group-time
+summary_df_modells <- df_modells %>%
+  group_by(Group, Time) %>%
+  summarise(
+    mean_expr = mean(rel_exp),
+    sd_expr = sd(rel_exp),
+    n = n(),
+    .groups = "drop"
+  )
+
+# Separate Cu and BCS for comparison
+bcs <- summary_df_modells %>% filter(Group == "bcs") %>%
+  rename(BCS_mean = mean_expr, BCS_sd = sd_expr, BCS_n = n)
+cu <- summary_df_modells %>% filter(Group == "cu") %>%
+  rename(Cu_mean = mean_expr, Cu_sd = sd_expr, Cu_n = n)
+
+# Merge and compute Z-tests
+merged <- merge(bcs, cu, by = "Time") %>%
+  mutate(
+    Z = (BCS_mean - Cu_mean) / sqrt((BCS_sd^2 / BCS_n) + (Cu_sd^2 / Cu_n)),
+    p_value = 2 * pnorm(-abs(Z))
+  )
+
+# Correlative Test: Cu ~ BCS
+cor.test(
+  merged$BCS_mean,
+  merged$Cu_mean,
+  method = "pearson"
+)
+
+# Supression Dynamics
+merged <- merged %>%
+  mutate(Suppression = Cu_mean - BCS_mean)
+
+
+model2_no_t0 <- lm(Suppression ~ Time, data = merged %>% filter(Time != 0))
+
+summary(model2_no_t0)
+
+
+
+```
